@@ -741,20 +741,24 @@ class RoIHeads(torch.nn.Module):
                 assert t["labels"].dtype == torch.int64, 'target labels must of int64 type'
                 if self.has_keypoint():
                     assert t["keypoints"].dtype == torch.float32, 'target keypoints must of float type'
-
-        if self.training:
-            proposals, matched_idxs, labels, regression_targets = self.select_training_samples(proposals, targets)
-        else:
-            labels = None
-            regression_targets = None
-            matched_idxs = None
-
+        
+        #if self.training:
+            #proposals, matched_idxs, labels, regression_targets = self.select_training_samples(proposals, targets)
+        #else:
+            #labels = None
+            #regression_targets = None
+            #matched_idxs = None
+        
+        # I will get the labels, regression_targets, matched_idxs for training and testing
+        proposals, matched_idxs, labels, regression_targets = self.select_training_samples(proposals, targets)
+        
         box_features = self.box_roi_pool(features, proposals, image_shapes)
         box_features = self.box_head(box_features)
         class_logits, box_regression = self.box_predictor(box_features)
 
         result = torch.jit.annotate(List[Dict[str, torch.Tensor]], [])
         losses = {}
+        
         if self.training:
             assert labels is not None and regression_targets is not None
             loss_classifier, loss_box_reg = fastrcnn_loss(
@@ -763,17 +767,29 @@ class RoIHeads(torch.nn.Module):
                 "loss_classifier": loss_classifier,
                 "loss_box_reg": loss_box_reg
             }
+            
+        # I want both the results and losses when using model.eval()
         else:
-            boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
-            num_images = len(boxes)
+            # Getting Predictions
+            pred_boxes, pred_scores, pred_labels = self.postprocess_detections(class_logits, box_regression,
+                                                                               proposals, image_shapes)
+            num_images = len(pred_boxes)
             for i in range(num_images):
                 result.append(
                     {
-                        "boxes": boxes[i],
-                        "labels": labels[i],
-                        "scores": scores[i],
+                        "boxes": pred_boxes[i],
+                        "labels": pred_labels[i],
+                        "scores": pred_scores[i],
                     }
                 )
+                
+
+            loss_classifier, loss_box_reg = fastrcnn_loss(
+                class_logits, box_regression, labels, regression_targets)
+            losses = {
+                "loss_classifier": loss_classifier,
+                "loss_box_reg": loss_box_reg
+            }
 
         if self.has_mask():
             mask_proposals = [p["boxes"] for p in result]
